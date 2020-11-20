@@ -1,0 +1,24 @@
+- Big Endian by default.
+
+Header:
+u8  'jrc'
+u8  version
+u32 crc
+u32 chunkCount
+
+Data:
+Chunk[chunkCount] chunks
+
+========================
+
+Chunk:
+u16                flags
+7beu               uncompressedSize
+7beu               compressedSize       - Omitted if the compressed flag isn't set, in which case this takes on the value of uncompressedSize.
+7beu               unusedSize
+7beuStr            name
+7beuStr            type
+u8[compressedSize] data
+u8[unusedSize]     _                    - If the chunk is rewritten, and it uses less space than before, then these bytes will simply be left unused.
+
+========================

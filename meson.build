@@ -22,11 +22,18 @@ lzma_src = [
     'extern/lzma/MtDec.c',
 ]
 
-src = [
-    'source/jarchive/package.d'
+jarchive_src = [
+    'source/jarchive/package.d',
+    'source/jarchive/reader.d',
+    'source/jarchive/bits.d',
+    'source/jarchive/memory.d',
 ]
 
-lzma     = library('lzma', lzma_src)
-jarchive = library('jarchive', src, link_with: lzma)
+all_d_src = jarchive_src
 
-test('basic', executable('jarchive-tests', src + ['test.d'], d_unittest: true))
+d_include = include_directories('source/', 'extern/')
+
+lzma     = library('lzma', lzma_src)
+jarchive = library('jarchive', all_d_src, link_with: [lzma], include_directories: [d_include], d_args: ['--betterC'])
+
+test('basic', executable('jarchive-tests', all_d_src + ['test.d'], link_with: [lzma], include_directories: [d_include], d_unittest: true))

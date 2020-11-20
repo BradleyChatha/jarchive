@@ -1,0 +1,4 @@
+module jarchive.reader;
+
+@nogc:
+
