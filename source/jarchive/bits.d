@@ -1,6 +1,6 @@
 module jarchive.bits;
 
-import core.stdc.stdio;
+import core.stdc.stdio, core.stdc.config;
 import jarchive;
 
 extern(C) @nogc:
@@ -11,8 +11,13 @@ struct JarcBinaryReader
 
     const(ubyte)[] data;
     FILE*          file;
-    size_t         cursor;
     JarcBinaryMode mode;
+
+    union
+    {
+        size_t cursor;
+        c_long fileSize;
+    }
 
     @nogc
     public this(const(ubyte[]) data) // Public so std.conv.emplace can see it.
@@ -27,6 +32,10 @@ struct JarcBinaryReader
         assert(file !is null);
         this.file = file;
         this.mode = JarcBinaryMode.file;
+
+        fseek(file, 0, SEEK_END);
+        this.fileSize = ftell(file);
+        fseek(file, 0, SEEK_SET);
     }
 
     @nogc
@@ -84,27 +93,40 @@ void jarcBinaryReader_free(
     free!JarcBinaryReader(reader);
 }
 
-JarcResult jarcBinaryReader_seek(
+JarcResult jarcBinaryReader_setCursor(
     JarcBinaryReader* reader,
-    size_t offset
+    c_long offset
 )
 {
-    reader.cursor = offset;
-    return (!jarcBinaryReader_isEof(reader)) ? JARC_OK : JARC_EOF;
+    if(reader.mode == JarcBinaryMode.memory)
+    {
+        reader.cursor = cast(size_t)offset;
+        return (!jarcBinaryReader_isEof(reader)) ? JARC_OK : JARC_EOF;
+    }
+    else if(reader.mode == JarcBinaryMode.file)
+    {
+        const result = fseek(reader.file, offset, SEEK_SET);
+        return (result != 0) ? JARC_UNKNOWN_ERROR : JARC_OK;
+    }
+    else assert(false);
+}
+
+c_long jarcBinaryReader_getCursor(
+    JarcBinaryReader* reader
+)
+{
+    return (reader.mode == JarcBinaryMode.memory)
+    ? cast(c_long)reader.cursor
+    : ftell(reader.file);
 }
 
 bool jarcBinaryReader_isEof(
     JarcBinaryReader* reader
 )
 {
-    return reader.cursor >= reader.data.length;
-}
-
-size_t jarcBinaryReader_getCursor(
-    JarcBinaryReader* reader
-)
-{
-    return reader.cursor;
+    return (reader.mode == JarcBinaryMode.memory)
+    ? reader.cursor >= reader.data.length
+    : ftell(reader.file) >= reader.fileSize;
 }
 
 size_t jarcBinaryReader_readBytes(
@@ -234,7 +256,7 @@ unittest
     assert(jarcBinaryReader_getCursor(reader) == bytes.length);
 
     assert(jarcBinaryReader_isEof(reader));
-    assert(jarcBinaryReader_seek(reader, 0) == JARC_OK);
+    assert(jarcBinaryReader_setCursor(reader, 0) == JARC_OK);
     assert(readOk!(ubyte, jarcBinaryReader_readU8)(reader) == 0xAA);
-    assert(jarcBinaryReader_seek(reader, 200000) == JARC_EOF);
+    assert(jarcBinaryReader_setCursor(reader, 200000) == JARC_EOF);
 }
