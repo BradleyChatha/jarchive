@@ -27,7 +27,7 @@ jarchive_src = [
     'source/jarchive/reader.d',
     'source/jarchive/bits.d',
     'source/jarchive/memory.d',
-    'source/jarchive/results.d',
+    'source/jarchive/enums.d',
 ]
 
 all_d_src = jarchive_src

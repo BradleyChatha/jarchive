@@ -1,5 +1,6 @@
 module jarchive.bits;
 
+import core.stdc.stdio;
 import jarchive;
 
 extern(C) @nogc:
@@ -9,7 +10,32 @@ struct JarcBinaryReader
     private:
 
     const(ubyte)[] data;
-    size_t cursor;
+    FILE*          file;
+    size_t         cursor;
+    JarcBinaryMode mode;
+
+    @nogc
+    public this(const(ubyte[]) data) // Public so std.conv.emplace can see it.
+    {
+        this.data = data;
+        this.mode = JarcBinaryMode.memory;
+    }
+
+    @nogc
+    public this(FILE* file)
+    {
+        assert(file !is null);
+        this.file = file;
+        this.mode = JarcBinaryMode.file;
+    }
+
+    @nogc
+    public ~this()
+    {
+        if(this.mode == JarcBinaryMode.file
+        && this.file !is null)
+            fclose(this.file);
+    }
 }
 
 JarcBinaryReader* jarcBinaryReader_openMemory(scope const ubyte* bytes, size_t length)
@@ -23,11 +49,39 @@ JarcBinaryReader* jarcBinaryReader_openMemory(T)(scope T[] slice)
     return jarcBinaryReader_openMemory(cast(ubyte*)slice.ptr, T.sizeof * slice.length);
 }
 
+JarcBinaryReader* jarcBinaryReader_openFileByNamez(scope const ubyte* name)
+{
+    FILE* file = fopen(cast(char*)name, "r");
+    if(file is null)
+        return null;
+
+    scope reader = alloc!JarcBinaryReader(file);
+    if(reader is null)
+        fclose(file);
+
+    return reader;
+}
+
+JarcBinaryReader* jarcBinaryReader_openFileByName(scope const ubyte* name_, size_t length)
+{
+    scope name = allocArray!ubyte(length + 1);
+    if(name is null)
+        return null;
+
+    name[0..$-1] = name_[0..length];
+    name[$-1] = '\0';
+
+    scope reader = jarcBinaryReader_openFileByNamez(name.ptr);
+    free(name);
+
+    return reader;
+}
+
 void jarcBinaryReader_free(
     JarcBinaryReader* reader
 )
 {
-    free(reader);
+    free!JarcBinaryReader(reader);
 }
 
 JarcResult jarcBinaryReader_seek(
@@ -67,7 +121,14 @@ size_t jarcBinaryReader_readBytes(
     : min(amount, reader.data.length - reader.cursor, *bufferSize);
 
     if(toRead != 0)
-        buffer[0..toRead] = reader.data[reader.cursor..reader.cursor+toRead];
+    {
+        if(reader.mode == JarcBinaryMode.memory)
+            buffer[0..toRead] = reader.data[reader.cursor..reader.cursor+toRead];
+        else if(reader.mode == JarcBinaryMode.file)
+            fread(buffer, 1, toRead, reader.file);
+        else
+            assert(false);
+    }
 
     reader.cursor += toRead;
     return toRead;
@@ -170,7 +231,7 @@ unittest
     assert(readOk!(ulong, jarcBinaryReader_read7BitEncodedU)(reader) == 0x3FFF);
     assert(readOk!(ulong, jarcBinaryReader_read7BitEncodedU)(reader) == 0x1FFFFF);
     assert(readOk!(ulong, jarcBinaryReader_read7BitEncodedU)(reader) == ulong.max);
-    assert(jarcBinaryReader_getCursor(reader)        == bytes.length);
+    assert(jarcBinaryReader_getCursor(reader) == bytes.length);
 
     assert(jarcBinaryReader_isEof(reader));
     assert(jarcBinaryReader_seek(reader, 0) == JARC_OK);
