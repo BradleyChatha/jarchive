@@ -182,7 +182,11 @@ JarcResult jarcBinaryStream_setCursor(
     else if(stream.mode == JarcBinaryMode.file)
     {
         const result = fseek(stream.file, offset, SEEK_SET);
-        return (result != 0) ? JARC_UNKNOWN_ERROR : JARC_OK;
+        return (result != 0) 
+        ? JARC_UNKNOWN_ERROR 
+        : (!jarcBinaryStream_isEof(stream))
+            ? JARC_OK
+            : JARC_EOF;
     }
     else assert(false);
 }
@@ -219,9 +223,17 @@ size_t jarcBinaryStream_readBytes(
     if(!stream.readWriteMode.canRead)
         return 0;
 
+    const size = (stream.mode == JarcBinaryMode.memoryBorrowed || stream.mode == JarcBinaryMode.memoryOwned)
+    ? stream.usedCapacity
+    : stream.fileSize;
+
+    const cursor = (stream.mode == JarcBinaryMode.memoryBorrowed || stream.mode == JarcBinaryMode.memoryOwned)
+    ? stream.cursor
+    : ftell(stream.file);
+
     auto toRead = (bufferSize is null)
-    ? min(amount, stream.usedCapacity - stream.cursor)
-    : min(amount, stream.usedCapacity - stream.cursor, *bufferSize);
+    ? min(amount, size - cursor)
+    : min(amount, size - cursor, *bufferSize);
 
     if(toRead != 0)
     {
@@ -336,6 +348,10 @@ JarcResult jarcBinaryStream_writeBytes(
             break;
 
         case file:
+            const endCursor = ftell(stream.file) + amount;
+            if(endCursor >= stream.fileSize)
+                stream.fileSize = cast(c_long)endCursor;
+
             fwrite(bytes, 1, amount, stream.file);
             break;
     }
@@ -423,7 +439,7 @@ JarcResult jarcBinaryStream_getMemory(
 
 unittest
 {
-    import core.stdc.stdio : printf;
+    import core.stdc.stdio : printf, remove;
 
     static ubyte[] bytes = [
         0xAA,
@@ -438,7 +454,9 @@ unittest
     static T readOk(T, alias Func)(JarcBinaryStream* stream)
     {
         T value;
-        assert(Func(stream, &value) == JARC_OK);
+
+        const result = Func(stream, &value);
+        assert(result == JARC_OK);
 
         return value;
     }
@@ -514,4 +532,12 @@ unittest
     assert(jarcBinaryStream_getMemory(longWriteStream, &bytesPtr, &length) == JARC_OK);
     assert(length == bytes.length);
     assert(bytesPtr[0..length] == bytes[0..$]);
+
+    const TEST_FILE_NAME = "test.bin";
+    remove(TEST_FILE_NAME.ptr);
+    scope fileStream = jarcBinaryStream_openFileByName(JARC_READ_WRITE, cast(const ubyte*)TEST_FILE_NAME.ptr, TEST_FILE_NAME.length);
+    scope(exit) jarcBinaryStream_free(fileStream);
+    writeTestData(fileStream);
+    jarcBinaryStream_setCursor(fileStream, 0);
+    genericTest(fileStream);
 }
