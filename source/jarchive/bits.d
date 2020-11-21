@@ -5,13 +5,14 @@ import jarchive;
 
 extern(C) @nogc:
 
-struct JarcBinaryReader
+struct JarcBinaryStream
 {
     private:
 
     const(ubyte)[] data;
     FILE*          file;
     JarcBinaryMode mode;
+    JarcReadWrite  readWriteMode;
 
     union
     {
@@ -20,18 +21,20 @@ struct JarcBinaryReader
     }
 
     @nogc
-    public this(const(ubyte[]) data) // Public so std.conv.emplace can see it.
+    public this(const(ubyte[]) data, JarcReadWrite readWrite) // Public so std.conv.emplace can see it.
     {
         this.data = data;
         this.mode = JarcBinaryMode.memory;
+        this.readWriteMode = readWrite;
     }
 
     @nogc
-    public this(FILE* file)
+    public this(FILE* file, JarcReadWrite readWrite)
     {
         assert(file !is null);
         this.file = file;
         this.mode = JarcBinaryMode.file;
+        this.readWriteMode = readWrite;
 
         fseek(file, 0, SEEK_END);
         this.fileSize = ftell(file);
@@ -47,31 +50,51 @@ struct JarcBinaryReader
     }
 }
 
-JarcBinaryReader* jarcBinaryReader_openMemory(scope const ubyte* bytes, size_t length)
+JarcBinaryStream* jarcBinaryStream_openMemory(JarcReadWrite readWrite, scope const ubyte* bytes, size_t length)
 {
-    return alloc!JarcBinaryReader(bytes[0..length]);
+    return alloc!JarcBinaryStream(bytes[0..length], readWrite);
 }
 
 extern(D)
-JarcBinaryReader* jarcBinaryReader_openMemory(T)(scope T[] slice)
+JarcBinaryStream* jarcBinaryStream_openMemory(T)(JarcReadWrite readWrite, scope T[] slice)
 {
-    return jarcBinaryReader_openMemory(cast(ubyte*)slice.ptr, T.sizeof * slice.length);
+    return jarcBinaryStream_openMemory(readWrite, cast(ubyte*)slice.ptr, T.sizeof * slice.length);
 }
 
-JarcBinaryReader* jarcBinaryReader_openFileByNamez(scope const ubyte* name)
+JarcBinaryStream* jarcBinaryStream_openFileByNamez(JarcReadWrite readWrite, scope const ubyte* name)
 {
-    FILE* file = fopen(cast(char*)name, "r");
+    // Taken from std.file. It's a private method unfortunately.
+    bool existsImpl(const(char)* namez) @trusted nothrow @nogc
+    {
+        version (Windows)
+        {
+            import core.sys.windows.winbase;
+            return GetFileAttributesA(namez) != 0xFFFFFFFF;
+        }
+        else version (Posix)
+        {
+            import core.sys.posix.sys.stat;
+            stat_t statbuf = void;
+            return lstat(namez, &statbuf) == 0;
+        }
+        else
+            static assert(0);
+    }
+    const fileExists = existsImpl(cast(char*)name);
+    string fileMode  = (fileExists) ? "r+" : "w+";
+
+    FILE* file = fopen(cast(char*)name, fileMode.ptr); // Literals always have a null terminator.
     if(file is null)
         return null;
 
-    scope reader = alloc!JarcBinaryReader(file);
+    scope reader = alloc!JarcBinaryStream(file, readWrite);
     if(reader is null)
         fclose(file);
 
     return reader;
 }
 
-JarcBinaryReader* jarcBinaryReader_openFileByName(scope const ubyte* name_, size_t length)
+JarcBinaryStream* jarcBinaryStream_openFileByName(JarcReadWrite readWrite, scope const ubyte* name_, size_t length)
 {
     scope name = allocArray!ubyte(length + 1);
     if(name is null)
@@ -80,28 +103,29 @@ JarcBinaryReader* jarcBinaryReader_openFileByName(scope const ubyte* name_, size
     name[0..$-1] = name_[0..length];
     name[$-1] = '\0';
 
-    scope reader = jarcBinaryReader_openFileByNamez(name.ptr);
+    scope reader = jarcBinaryStream_openFileByNamez(readWrite, name.ptr);
     free(name);
 
     return reader;
 }
 
-void jarcBinaryReader_free(
-    JarcBinaryReader* reader
+void jarcBinaryStream_free(
+    JarcBinaryStream* reader
 )
 {
-    free!JarcBinaryReader(reader);
+    assert(reader !is null);
+    free!JarcBinaryStream(reader);
 }
 
-JarcResult jarcBinaryReader_setCursor(
-    JarcBinaryReader* reader,
+JarcResult jarcBinaryStream_setCursor(
+    JarcBinaryStream* reader,
     c_long offset
 )
 {
     if(reader.mode == JarcBinaryMode.memory)
     {
         reader.cursor = cast(size_t)offset;
-        return (!jarcBinaryReader_isEof(reader)) ? JARC_OK : JARC_EOF;
+        return (!jarcBinaryStream_isEof(reader)) ? JARC_OK : JARC_EOF;
     }
     else if(reader.mode == JarcBinaryMode.file)
     {
@@ -111,8 +135,8 @@ JarcResult jarcBinaryReader_setCursor(
     else assert(false);
 }
 
-c_long jarcBinaryReader_getCursor(
-    JarcBinaryReader* reader
+c_long jarcBinaryStream_getCursor(
+    JarcBinaryStream* reader
 )
 {
     return (reader.mode == JarcBinaryMode.memory)
@@ -120,8 +144,8 @@ c_long jarcBinaryReader_getCursor(
     : ftell(reader.file);
 }
 
-bool jarcBinaryReader_isEof(
-    JarcBinaryReader* reader
+bool jarcBinaryStream_isEof(
+    JarcBinaryStream* reader
 )
 {
     return (reader.mode == JarcBinaryMode.memory)
@@ -129,14 +153,17 @@ bool jarcBinaryReader_isEof(
     : ftell(reader.file) >= reader.fileSize;
 }
 
-size_t jarcBinaryReader_readBytes(
-    JarcBinaryReader* reader, 
+size_t jarcBinaryStream_readBytes(
+    JarcBinaryStream* reader, 
     scope ubyte*      buffer, 
     size_t*           bufferSize, 
     size_t            amount
 )
 {
     import std.algorithm : min;
+
+    if(!reader.readWriteMode.canRead)
+        return 0;
 
     auto toRead = (bufferSize is null)
     ? min(amount, reader.data.length - reader.cursor)
@@ -157,15 +184,18 @@ size_t jarcBinaryReader_readBytes(
 }
 
 extern(D)
-JarcResult jarcBinaryReader_readPrimitive(T)(
-    JarcBinaryReader* reader,
+JarcResult jarcBinaryStream_readPrimitive(T)(
+    JarcBinaryStream* reader,
     T* data
 )
 {
     import std.bitmanip : bigEndianToNative;
 
+    if(!reader.readWriteMode.canRead)
+        return JARC_CANT_READ;
+
     ubyte[T.sizeof] bytes;
-    const read = jarcBinaryReader_readBytes(reader, bytes.ptr, null, T.sizeof);
+    const read = jarcBinaryStream_readBytes(reader, bytes.ptr, null, T.sizeof);
     if(read != bytes.length)
         return JARC_EOF;
 
@@ -176,9 +206,9 @@ JarcResult jarcBinaryReader_readPrimitive(T)(
 private mixin template readPrimitive(string name, T) 
 {
     mixin(`
-    JarcResult jarcBinaryReader_read`~name~`(JarcBinaryReader* reader, T* data)
+    JarcResult jarcBinaryStream_read`~name~`(JarcBinaryStream* reader, T* data)
     {
-        return jarcBinaryReader_readPrimitive!T(reader, data); 
+        return jarcBinaryStream_readPrimitive!T(reader, data); 
     }
     `);
 }
@@ -188,8 +218,8 @@ mixin readPrimitive!("U16", ushort);
 mixin readPrimitive!("U32", uint);
 mixin readPrimitive!("U64", ulong);
 
-JarcResult jarcBinaryReader_read7BitEncodedU(
-    JarcBinaryReader* reader,
+JarcResult jarcBinaryStream_read7BitEncodedU(
+    JarcBinaryStream* reader,
     ulong* data
 )
 {
@@ -202,7 +232,7 @@ JarcResult jarcBinaryReader_read7BitEncodedU(
             return JARC_BAD_DATA;
 
         ubyte next;
-        const result = jarcBinaryReader_readPrimitive!ubyte(reader, &next);
+        const result = jarcBinaryStream_readPrimitive!ubyte(reader, &next);
         if(result != JARC_OK)
             return result;
 
@@ -231,7 +261,7 @@ unittest
         0b0111_1111, 0b0111_1111, 0b0111_1111, 0b0111_1111, 0b0111_1111, 0b0111_1111, 0b0111_1111, 0b0111_1111, 0b0111_1111, 0b1000_0001
     ];
 
-    static T readOk(T, alias Func)(JarcBinaryReader* reader)
+    static T readOk(T, alias Func)(JarcBinaryStream* reader)
     {
         T value;
         assert(Func(reader, &value) == JARC_OK);
@@ -239,24 +269,24 @@ unittest
         return value;
     }
 
-    scope reader = jarcBinaryReader_openMemory(bytes);
-    scope(exit) jarcBinaryReader_free(reader);
+    scope reader = jarcBinaryStream_openMemory(JARC_READ, bytes);
+    scope(exit) jarcBinaryStream_free(reader);
 
     ubyte data;
-    assert(jarcBinaryReader_readBytes(reader, &data, null, 1) == 1);
+    assert(jarcBinaryStream_readBytes(reader, &data, null, 1) == 1);
     assert(data == 0xAA);
 
-    assert(readOk!(ushort, jarcBinaryReader_readU16)(reader) == 0xAABB);
-    assert(readOk!(uint, jarcBinaryReader_readU32)(reader) == 0xAABBCCDD);
+    assert(readOk!(ushort, jarcBinaryStream_readU16)(reader) == 0xAABB);
+    assert(readOk!(uint, jarcBinaryStream_readU32)(reader) == 0xAABBCCDD);
 
-    assert(readOk!(ulong, jarcBinaryReader_read7BitEncodedU)(reader) == 0x7F);
-    assert(readOk!(ulong, jarcBinaryReader_read7BitEncodedU)(reader) == 0x3FFF);
-    assert(readOk!(ulong, jarcBinaryReader_read7BitEncodedU)(reader) == 0x1FFFFF);
-    assert(readOk!(ulong, jarcBinaryReader_read7BitEncodedU)(reader) == ulong.max);
-    assert(jarcBinaryReader_getCursor(reader) == bytes.length);
+    assert(readOk!(ulong, jarcBinaryStream_read7BitEncodedU)(reader) == 0x7F);
+    assert(readOk!(ulong, jarcBinaryStream_read7BitEncodedU)(reader) == 0x3FFF);
+    assert(readOk!(ulong, jarcBinaryStream_read7BitEncodedU)(reader) == 0x1FFFFF);
+    assert(readOk!(ulong, jarcBinaryStream_read7BitEncodedU)(reader) == ulong.max);
+    assert(jarcBinaryStream_getCursor(reader) == bytes.length);
 
-    assert(jarcBinaryReader_isEof(reader));
-    assert(jarcBinaryReader_setCursor(reader, 0) == JARC_OK);
-    assert(readOk!(ubyte, jarcBinaryReader_readU8)(reader) == 0xAA);
-    assert(jarcBinaryReader_setCursor(reader, 200000) == JARC_EOF);
+    assert(jarcBinaryStream_isEof(reader));
+    assert(jarcBinaryStream_setCursor(reader, 0) == JARC_OK);
+    assert(readOk!(ubyte, jarcBinaryStream_readU8)(reader) == 0xAA);
+    assert(jarcBinaryStream_setCursor(reader, 200000) == JARC_EOF);
 }
