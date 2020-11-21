@@ -399,6 +399,26 @@ JarcResult jarcBinaryStream_write7BitEncodedU(
     return JARC_OK;
 }
 
+//////// START MEMORY-SPECIFIC ////////
+
+JarcResult jarcBinaryStream_getMemory(
+    JarcBinaryStream* stream,
+    scope ubyte** bytesPtr,
+    scope size_t* lengthPtr
+)
+{
+    if(stream.mode != JarcBinaryMode.memoryOwned && stream.mode != JarcBinaryMode.memoryBorrowed)
+        return JARC_WRONG_MODE;
+
+    if(bytesPtr !is null)
+        *bytesPtr = stream.data.ptr;
+
+    if(lengthPtr !is null)
+        *lengthPtr = stream.usedCapacity;
+
+    return JARC_OK;
+}
+
 //////// START UNITTESTS ////////
 
 unittest
@@ -489,4 +509,9 @@ unittest
     writeTestData(longWriteStream);
     jarcBinaryStream_setCursor(longWriteStream, 0);
     genericTest(longWriteStream);
+    ubyte* bytesPtr;
+    size_t length;
+    assert(jarcBinaryStream_getMemory(longWriteStream, &bytesPtr, &length) == JARC_OK);
+    assert(length == bytes.length);
+    assert(bytesPtr[0..length] == bytes[0..$]);
 }
