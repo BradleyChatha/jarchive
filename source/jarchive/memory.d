@@ -1,7 +1,7 @@
 module jarchive.memory;
 
 import std.conv : emplace;
-import core.stdc.stdlib : malloc, cfree = free;
+import core.stdc.stdlib : malloc, cfree = free, realloc;
 
 @nogc:
 
@@ -21,6 +21,19 @@ T[] allocArray(T)(size_t amount)
 
     scope ptr = malloc(T.sizeof * amount);
     return (ptr is null) ? null : (cast(T*)ptr)[0..amount];
+}
+
+void resizeArray(T)(ref T[] array, size_t size)
+{
+    if(size == 0)
+    {
+        free(array);
+        array = null;
+        return;
+    }
+
+    scope ptr = cast(T*)realloc(array.ptr, size);
+    array = (ptr is null) ? null : (cast(T*)ptr)[0..size];
 }
 
 void free(void* ptr)

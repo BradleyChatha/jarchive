@@ -5,27 +5,41 @@ import jarchive;
 
 extern(C) @nogc:
 
+//////// START TYPES ////////
+
 struct JarcBinaryStream
 {
     private:
 
-    const(ubyte)[] data;
-    FILE*          file;
     JarcBinaryMode mode;
     JarcReadWrite  readWriteMode;
 
     union
     {
-        size_t cursor;
-        c_long fileSize;
+        struct
+        {
+            ubyte[] data;
+            size_t cursor;
+            size_t usedCapacity;
+        }
+
+        struct
+        {
+            FILE* file;
+            c_long fileSize;
+        }
     }
 
+    @disable
+    public this(this){}
+
     @nogc
-    public this(const(ubyte[]) data, JarcReadWrite readWrite) // Public so std.conv.emplace can see it.
+    public this(ubyte[] data, JarcReadWrite readWrite, bool owned) // Public so std.conv.emplace can see it.
     {
         this.data = data;
-        this.mode = JarcBinaryMode.memory;
+        this.mode = (owned) ? JarcBinaryMode.memoryOwned : JarcBinaryMode.memoryBorrowed;
         this.readWriteMode = readWrite;
+        this.usedCapacity = this.data.length;
     }
 
     @nogc
@@ -47,18 +61,54 @@ struct JarcBinaryStream
         if(this.mode == JarcBinaryMode.file
         && this.file !is null)
             fclose(this.file);
+
+        if(this.mode == JarcBinaryMode.memoryOwned
+        && this.data !is null)
+            free(this.data);
     }
 }
 
-JarcBinaryStream* jarcBinaryStream_openMemory(JarcReadWrite readWrite, scope const ubyte* bytes, size_t length)
+//////// START CONSTRUCTORS & DTOR ////////
+
+// 'bytes' is 'borrowed'. JarcBinaryStream cannot grow its size (i.e. pointer won't invalidate), but can still modify it.
+JarcBinaryStream* jarcBinaryStream_openBorrowedMemory(JarcReadWrite readWrite, scope ubyte* bytes, size_t length)
 {
-    return alloc!JarcBinaryStream(bytes[0..length], readWrite);
+    return alloc!JarcBinaryStream(bytes[0..length], readWrite, false);
 }
 
-extern(D)
-JarcBinaryStream* jarcBinaryStream_openMemory(T)(JarcReadWrite readWrite, scope T[] slice)
+private JarcBinaryStream* jarcBinaryStream_openBorrowedMemory(T)(JarcReadWrite readWrite, scope T[] slice)
 {
-    return jarcBinaryStream_openMemory(readWrite, cast(ubyte*)slice.ptr, T.sizeof * slice.length);
+    return jarcBinaryStream_openBorrowedMemory(readWrite, cast(ubyte*)slice.ptr, T.sizeof * slice.length);
+}
+
+// 'bytes' is 'owned'. JarcBinaryStream can grow its size (i.e. the pointer can become invalidated, so never touch it again from your own code).
+JarcBinaryStream* jarcBinaryStream_openOwnedMemory(JarcReadWrite readWrite, scope ubyte* bytes, size_t length)
+{
+    return alloc!JarcBinaryStream(bytes[0..length], readWrite, true);
+}
+
+// 'bytes' is 'copied'. JarcBinaryStream will duplicate the data, and then works the same as 'owned' memory.
+JarcBinaryStream* jarcBinaryStream_openCopyOwnedMemory(JarcReadWrite readWrite, scope ubyte* bytes, size_t length)
+{
+    scope copied = allocArray!ubyte(length);
+    if(copied is null)
+        return null;
+    copied[0..$] = bytes[0..length];
+
+    auto stream = jarcBinaryStream_openOwnedMemory(readWrite, copied.ptr, length);
+    if(stream is null)
+    {
+        free(copied);
+        return null;
+    }
+
+    return stream;
+}
+
+// Start off with no memory, and dynamically allocate as we go along in 'owned' mode.
+JarcBinaryStream* jarcBinaryStream_openNewMemory(JarcReadWrite readWrite)
+{
+    return alloc!JarcBinaryStream(null, readWrite, true);
 }
 
 JarcBinaryStream* jarcBinaryStream_openFileByNamez(JarcReadWrite readWrite, scope const ubyte* name)
@@ -87,11 +137,11 @@ JarcBinaryStream* jarcBinaryStream_openFileByNamez(JarcReadWrite readWrite, scop
     if(file is null)
         return null;
 
-    scope reader = alloc!JarcBinaryStream(file, readWrite);
-    if(reader is null)
+    scope stream = alloc!JarcBinaryStream(file, readWrite);
+    if(stream is null)
         fclose(file);
 
-    return reader;
+    return stream;
 }
 
 JarcBinaryStream* jarcBinaryStream_openFileByName(JarcReadWrite readWrite, scope const ubyte* name_, size_t length)
@@ -103,58 +153,62 @@ JarcBinaryStream* jarcBinaryStream_openFileByName(JarcReadWrite readWrite, scope
     name[0..$-1] = name_[0..length];
     name[$-1] = '\0';
 
-    scope reader = jarcBinaryStream_openFileByNamez(readWrite, name.ptr);
+    scope stream = jarcBinaryStream_openFileByNamez(readWrite, name.ptr);
     free(name);
 
-    return reader;
+    return stream;
 }
 
 void jarcBinaryStream_free(
-    JarcBinaryStream* reader
+    JarcBinaryStream* stream
 )
 {
-    assert(reader !is null);
-    free!JarcBinaryStream(reader);
+    assert(stream !is null);
+    free!JarcBinaryStream(stream);
 }
 
+//////// START CURSOR MANIPULATION ////////
+
 JarcResult jarcBinaryStream_setCursor(
-    JarcBinaryStream* reader,
+    JarcBinaryStream* stream,
     c_long offset
 )
 {
-    if(reader.mode == JarcBinaryMode.memory)
+    if(stream.mode == JarcBinaryMode.memoryBorrowed || stream.mode == JarcBinaryMode.memoryOwned)
     {
-        reader.cursor = cast(size_t)offset;
-        return (!jarcBinaryStream_isEof(reader)) ? JARC_OK : JARC_EOF;
+        stream.cursor = cast(size_t)offset;
+        return (!jarcBinaryStream_isEof(stream)) ? JARC_OK : JARC_EOF;
     }
-    else if(reader.mode == JarcBinaryMode.file)
+    else if(stream.mode == JarcBinaryMode.file)
     {
-        const result = fseek(reader.file, offset, SEEK_SET);
+        const result = fseek(stream.file, offset, SEEK_SET);
         return (result != 0) ? JARC_UNKNOWN_ERROR : JARC_OK;
     }
     else assert(false);
 }
 
 c_long jarcBinaryStream_getCursor(
-    JarcBinaryStream* reader
+    JarcBinaryStream* stream
 )
 {
-    return (reader.mode == JarcBinaryMode.memory)
-    ? cast(c_long)reader.cursor
-    : ftell(reader.file);
+    return (stream.mode == JarcBinaryMode.memoryBorrowed || stream.mode == JarcBinaryMode.memoryOwned)
+    ? cast(c_long)stream.cursor
+    : ftell(stream.file);
 }
 
 bool jarcBinaryStream_isEof(
-    JarcBinaryStream* reader
+    JarcBinaryStream* stream
 )
 {
-    return (reader.mode == JarcBinaryMode.memory)
-    ? reader.cursor >= reader.data.length
-    : ftell(reader.file) >= reader.fileSize;
+    return (stream.mode == JarcBinaryMode.memoryBorrowed || stream.mode == JarcBinaryMode.memoryOwned)
+    ? stream.cursor >= stream.usedCapacity
+    : ftell(stream.file) >= stream.fileSize;
 }
 
+//////// START READING ////////
+
 size_t jarcBinaryStream_readBytes(
-    JarcBinaryStream* reader, 
+    JarcBinaryStream* stream, 
     scope ubyte*      buffer, 
     size_t*           bufferSize, 
     size_t            amount
@@ -162,40 +216,39 @@ size_t jarcBinaryStream_readBytes(
 {
     import std.algorithm : min;
 
-    if(!reader.readWriteMode.canRead)
+    if(!stream.readWriteMode.canRead)
         return 0;
 
     auto toRead = (bufferSize is null)
-    ? min(amount, reader.data.length - reader.cursor)
-    : min(amount, reader.data.length - reader.cursor, *bufferSize);
+    ? min(amount, stream.usedCapacity - stream.cursor)
+    : min(amount, stream.usedCapacity - stream.cursor, *bufferSize);
 
     if(toRead != 0)
     {
-        if(reader.mode == JarcBinaryMode.memory)
-            buffer[0..toRead] = reader.data[reader.cursor..reader.cursor+toRead];
-        else if(reader.mode == JarcBinaryMode.file)
-            fread(buffer, 1, toRead, reader.file);
+        if(stream.mode == JarcBinaryMode.memoryBorrowed || stream.mode == JarcBinaryMode.memoryOwned)
+            buffer[0..toRead] = stream.data[stream.cursor..stream.cursor+toRead];
+        else if(stream.mode == JarcBinaryMode.file)
+            fread(buffer, 1, toRead, stream.file);
         else
             assert(false);
     }
 
-    reader.cursor += toRead;
+    stream.cursor += toRead;
     return toRead;
 }
 
-extern(D)
-JarcResult jarcBinaryStream_readPrimitive(T)(
-    JarcBinaryStream* reader,
+private JarcResult jarcBinaryStream_readPrimitive(T)(
+    JarcBinaryStream* stream,
     T* data
 )
 {
     import std.bitmanip : bigEndianToNative;
 
-    if(!reader.readWriteMode.canRead)
+    if(!stream.readWriteMode.canRead)
         return JARC_CANT_READ;
 
     ubyte[T.sizeof] bytes;
-    const read = jarcBinaryStream_readBytes(reader, bytes.ptr, null, T.sizeof);
+    const read = jarcBinaryStream_readBytes(stream, bytes.ptr, null, T.sizeof);
     if(read != bytes.length)
         return JARC_EOF;
 
@@ -206,9 +259,9 @@ JarcResult jarcBinaryStream_readPrimitive(T)(
 private mixin template readPrimitive(string name, T) 
 {
     mixin(`
-    JarcResult jarcBinaryStream_read`~name~`(JarcBinaryStream* reader, T* data)
+    JarcResult jarcBinaryStream_read`~name~`(JarcBinaryStream* stream, T* data)
     {
-        return jarcBinaryStream_readPrimitive!T(reader, data); 
+        return jarcBinaryStream_readPrimitive!T(stream, data); 
     }
     `);
 }
@@ -219,7 +272,7 @@ mixin readPrimitive!("U32", uint);
 mixin readPrimitive!("U64", ulong);
 
 JarcResult jarcBinaryStream_read7BitEncodedU(
-    JarcBinaryStream* reader,
+    JarcBinaryStream* stream,
     ulong* data
 )
 {
@@ -232,7 +285,7 @@ JarcResult jarcBinaryStream_read7BitEncodedU(
             return JARC_BAD_DATA;
 
         ubyte next;
-        const result = jarcBinaryStream_readPrimitive!ubyte(reader, &next);
+        const result = jarcBinaryStream_readPrimitive!ubyte(stream, &next);
         if(result != JARC_OK)
             return result;
 
@@ -246,6 +299,107 @@ JarcResult jarcBinaryStream_read7BitEncodedU(
     *data = value;
     return JARC_OK;
 }
+
+//////// START WRITING ////////
+
+JarcResult jarcBinaryStream_writeBytes(
+    JarcBinaryStream* stream,
+    scope const ubyte* bytes,
+    size_t amount
+)
+{
+    import std.algorithm : max;
+
+    if(!stream.readWriteMode.canWrite)
+        return JARC_CANT_WRITE;
+
+    const end = stream.cursor + amount; // NOT SAFE TO READ IN file MODE.
+    final switch(stream.mode) with(JarcBinaryMode)
+    {
+        case memoryBorrowed:
+            if(end >= stream.data.length)
+                return JARC_EOF;
+
+            stream.data[stream.cursor..end] = bytes[0..amount];
+            stream.cursor = end;
+            break;
+        
+        case memoryOwned:
+            if(end >= stream.data.length)
+                resizeArray(stream.data, max(4096, end * 2));
+
+            if(end > stream.usedCapacity)
+                stream.usedCapacity = end;
+
+            stream.data[stream.cursor..end] = bytes[0..amount];
+            stream.cursor = end;
+            break;
+
+        case file:
+            fwrite(bytes, 1, amount, stream.file);
+            break;
+    }
+
+    return JARC_OK;
+}
+
+private JarcResult jarcBinaryStream_writePrimitive(T)(
+    JarcBinaryStream* stream,
+    T data
+)
+{
+    import std.bitmanip : nativeToBigEndian;
+
+    if(!stream.readWriteMode.canWrite)
+        return JARC_CANT_WRITE;
+
+    const bytes = nativeToBigEndian(data);
+    return jarcBinaryStream_writeBytes(stream, bytes.ptr, bytes.length);
+}
+
+private mixin template writePrimitive(string name, T) 
+{
+    mixin(`
+    JarcResult jarcBinaryStream_write`~name~`(JarcBinaryStream* stream, T data)
+    {
+        return jarcBinaryStream_writePrimitive!T(stream, data); 
+    }
+    `);
+}
+
+mixin writePrimitive!("U8",  ubyte);
+mixin writePrimitive!("U16", ushort);
+mixin writePrimitive!("U32", uint);
+mixin writePrimitive!("U64", ulong);
+
+JarcResult jarcBinaryStream_write7BitEncodedU(
+    JarcBinaryStream* stream,
+    ulong data
+)
+{
+    if(data == 0)
+    {
+        ubyte b = 0b1000_0000;
+        return jarcBinaryStream_writeBytes(stream, &b, 1);
+    }
+
+    while(data > 0)
+    {
+        auto next = cast(ubyte)(data & 0b0111_1111);
+        data >>= 7;
+
+        if(data == 0)
+            next |= 0b1000_0000;
+
+        const result = jarcBinaryStream_writeBytes(stream, &next, 1);
+        if(result != JARC_OK)
+            return result;
+    }
+
+    return JARC_OK;
+}
+
+//////// START UNITTESTS ////////
 
 unittest
 {
@@ -261,32 +415,78 @@ unittest
         0b0111_1111, 0b0111_1111, 0b0111_1111, 0b0111_1111, 0b0111_1111, 0b0111_1111, 0b0111_1111, 0b0111_1111, 0b0111_1111, 0b1000_0001
     ];
 
-    static T readOk(T, alias Func)(JarcBinaryStream* reader)
+    static T readOk(T, alias Func)(JarcBinaryStream* stream)
     {
         T value;
-        assert(Func(reader, &value) == JARC_OK);
+        assert(Func(stream, &value) == JARC_OK);
 
         return value;
     }
 
-    scope reader = jarcBinaryStream_openMemory(JARC_READ, bytes);
-    scope(exit) jarcBinaryStream_free(reader);
+    static void writeOk(alias Func, T)(JarcBinaryStream* stream, T value)
+    {
+        assert(Func(stream, value) == JARC_OK);
+    }
 
-    ubyte data;
-    assert(jarcBinaryStream_readBytes(reader, &data, null, 1) == 1);
-    assert(data == 0xAA);
+    static void genericTest(JarcBinaryStream* stream)
+    {
+        ubyte data;
+        assert(jarcBinaryStream_readBytes(stream, &data, null, 1) == 1);
+        assert(data == 0xAA);
 
-    assert(readOk!(ushort, jarcBinaryStream_readU16)(reader) == 0xAABB);
-    assert(readOk!(uint, jarcBinaryStream_readU32)(reader) == 0xAABBCCDD);
+        assert(readOk!(ushort, jarcBinaryStream_readU16)(stream) == 0xAABB);
+        assert(readOk!(uint, jarcBinaryStream_readU32)(stream) == 0xAABBCCDD);
 
-    assert(readOk!(ulong, jarcBinaryStream_read7BitEncodedU)(reader) == 0x7F);
-    assert(readOk!(ulong, jarcBinaryStream_read7BitEncodedU)(reader) == 0x3FFF);
-    assert(readOk!(ulong, jarcBinaryStream_read7BitEncodedU)(reader) == 0x1FFFFF);
-    assert(readOk!(ulong, jarcBinaryStream_read7BitEncodedU)(reader) == ulong.max);
-    assert(jarcBinaryStream_getCursor(reader) == bytes.length);
+        assert(readOk!(ulong, jarcBinaryStream_read7BitEncodedU)(stream) == 0x7F);
+        assert(readOk!(ulong, jarcBinaryStream_read7BitEncodedU)(stream) == 0x3FFF);
+        assert(readOk!(ulong, jarcBinaryStream_read7BitEncodedU)(stream) == 0x1FFFFF);
+        assert(readOk!(ulong, jarcBinaryStream_read7BitEncodedU)(stream) == ulong.max);
+        assert(jarcBinaryStream_getCursor(stream) == bytes.length);
 
-    assert(jarcBinaryStream_isEof(reader));
-    assert(jarcBinaryStream_setCursor(reader, 0) == JARC_OK);
-    assert(readOk!(ubyte, jarcBinaryStream_readU8)(reader) == 0xAA);
-    assert(jarcBinaryStream_setCursor(reader, 200000) == JARC_EOF);
+        assert(jarcBinaryStream_isEof(stream));
+        assert(jarcBinaryStream_setCursor(stream, 0) == JARC_OK);
+        assert(readOk!(ubyte, jarcBinaryStream_readU8)(stream) == 0xAA);
+        assert(jarcBinaryStream_setCursor(stream, 200000) == JARC_EOF);
+    }
+
+    static void writeTestData(JarcBinaryStream* stream)
+    {
+        ubyte data = 0xAA;
+        assert(jarcBinaryStream_writeBytes(stream, &data, 1) == JARC_OK);
+
+        writeOk!jarcBinaryStream_writeU16(stream, cast(ushort)0xAABB);
+        writeOk!jarcBinaryStream_writeU32(stream, 0xAABBCCDD);
+        writeOk!jarcBinaryStream_write7BitEncodedU(stream, 0x7F);
+        writeOk!jarcBinaryStream_write7BitEncodedU(stream, 0x3FFF);
+        writeOk!jarcBinaryStream_write7BitEncodedU(stream, 0x1FFFFF);
+        writeOk!jarcBinaryStream_write7BitEncodedU(stream, ulong.max);
+        assert(jarcBinaryStream_getCursor(stream) == bytes.length);
+        assert(jarcBinaryStream_isEof(stream));
+    }
+
+    scope stream = jarcBinaryStream_openBorrowedMemory(JARC_READ, bytes);
+    scope(exit) jarcBinaryStream_free(stream);
+    genericTest(stream);
+
+    auto ownedBytes = allocArray!ubyte(bytes.length);
+    ownedBytes[0..$] = bytes[0..$];
+    scope ownedStream = jarcBinaryStream_openOwnedMemory(JARC_READ, ownedBytes.ptr, ownedBytes.length);
+    scope(exit) jarcBinaryStream_free(ownedStream);
+    genericTest(ownedStream);
+
+    scope copiedStream = jarcBinaryStream_openCopyOwnedMemory(JARC_READ, bytes.ptr, bytes.length);
+    genericTest(copiedStream);
+    jarcBinaryStream_free(copiedStream); // 'bytes' will be in static data block, so free() would crash if we didn't copy properly
+
+    scope writeStream = jarcBinaryStream_openNewMemory(JARC_READ_WRITE);
+    scope(exit) jarcBinaryStream_free(writeStream);
+    assert(jarcBinaryStream_writeBytes(writeStream, bytes.ptr, bytes.length) == JARC_OK);
+    jarcBinaryStream_setCursor(writeStream, 0);
+    genericTest(writeStream);
+
+    scope longWriteStream = jarcBinaryStream_openNewMemory(JARC_READ_WRITE);
+    scope(exit) jarcBinaryStream_free(longWriteStream);
+    writeTestData(longWriteStream);
+    jarcBinaryStream_setCursor(longWriteStream, 0);
+    genericTest(longWriteStream);
 }

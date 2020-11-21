@@ -15,7 +15,8 @@ alias JarcResult = int;
 
 package enum JarcBinaryMode
 {
-    memory,
+    memoryBorrowed,
+    memoryOwned,
     file
 }
 
