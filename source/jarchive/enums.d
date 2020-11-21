@@ -10,7 +10,8 @@ enum : int
     JARC_UNKNOWN_ERROR  = 1002,
     JARC_CANT_READ      = 1003,
     JARC_CANT_WRITE     = 1004,
-    JARC_WRONG_MODE     = 1005
+    JARC_WRONG_MODE     = 1005,
+    JARC_OOM            = 1006
 }
 alias JarcResult = int;
 

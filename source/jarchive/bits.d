@@ -338,7 +338,15 @@ JarcResult jarcBinaryStream_writeBytes(
         
         case memoryOwned:
             if(end >= stream.data.length)
+            {
                 resizeArray(stream.data, max(4096, end * 2));
+                if(stream.data is null)
+                {
+                    resizeArray(stream.data, end);
+                    if(stream.data is null)
+                        return JARC_OOM;
+                }
+            }
 
             if(end > stream.usedCapacity)
                 stream.usedCapacity = end;
