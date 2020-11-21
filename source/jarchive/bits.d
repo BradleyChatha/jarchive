@@ -23,11 +23,27 @@ JarchiveBinaryReader* jarcBinaryReader_openMemory(T)(scope T[] slice)
     return jarcBinaryReader_openMemory(cast(ubyte*)slice.ptr, T.sizeof * slice.length);
 }
 
+bool jarcBinaryReader_seek(
+    JarchiveBinaryReader* reader,
+    size_t offset
+)
+{
+    reader.cursor = offset;
+    return !jarcBinaryReader_isEof(reader);
+}
+
 bool jarcBinaryReader_isEof(
     JarchiveBinaryReader* reader
 )
 {
     return reader.cursor >= reader.data.length;
+}
+
+size_t jarcBinaryReader_getCursor(
+    JarchiveBinaryReader* reader
+)
+{
+    return reader.cursor;
 }
 
 size_t jarcBinaryReader_readBytes(
@@ -123,6 +139,10 @@ unittest
     assert(jarcBinaryReader_read7BitEncodedU(reader) == 0x3FFF);
     assert(jarcBinaryReader_read7BitEncodedU(reader) == 0x1FFFFF);
     assert(jarcBinaryReader_read7BitEncodedU(reader) == ulong.max);
+    assert(jarcBinaryReader_getCursor(reader)        == bytes.length);
 
     assert(jarcBinaryReader_isEof(reader));
+    assert(jarcBinaryReader_seek(reader, 0));
+    assert(jarcBinaryReader_readU8(reader) == 0xAA);
+    assert(!jarcBinaryReader_seek(reader, 200000));
 }
