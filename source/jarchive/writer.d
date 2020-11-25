@@ -251,7 +251,8 @@ JarcResult jarcWriter_writeChunk(
     result = jarcBinaryStream_writeBytes(writer._archiveStream, bodyData, bodyLength);
     if(result != JARC_OK) return freeAndReturn();
 
-    return JARC_OK;
+    result = JARC_OK;
+    return freeAndReturn();
 }
 
 unittest
