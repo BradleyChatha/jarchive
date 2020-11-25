@@ -29,6 +29,7 @@ jarchive_src = [
     'source/jarchive/memory.d',
     'source/jarchive/enums.d',
     'source/jarchive/chunkhandler.d',
+    'source/jarchive/lzma.d',
 ]
 
 all_d_src = jarchive_src
