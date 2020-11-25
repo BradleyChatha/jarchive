@@ -1,9 +1,9 @@
-module jarchive.bits;
+module jarchive.binarystream;
 
 import core.stdc.stdio, core.stdc.config;
 import jarchive;
 
-extern(C) @nogc:
+extern(C) @nogc nothrow:
 
 //////// START TYPES ////////
 
@@ -29,6 +29,8 @@ struct JarcBinaryStream
             c_long fileSize;
         }
     }
+
+    nothrow:
 
     @disable
     public this(this){}
@@ -419,6 +421,21 @@ JarcResult jarcBinaryStream_write7BitEncodedU(
         if(result != JARC_OK)
             return result;
     }
+
+    return JARC_OK;
+}
+
+JarcResult jarcBinaryStream_writeString(
+    JarcBinaryStream* stream,
+    const char* text,
+    size_t textLength
+)
+{
+    auto result = jarcBinaryStream_write7BitEncodedU(stream, textLength);
+    if(result != JARC_OK) return result;
+
+    result = jarcBinaryStream_writeBytes(stream, cast(ubyte*)text, textLength);
+    if(result != JARC_OK) return result;
 
     return JARC_OK;
 }

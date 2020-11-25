@@ -3,7 +3,7 @@ module jarchive.memory;
 import std.conv : emplace;
 import core.stdc.stdlib : malloc, cfree = free, realloc;
 
-@nogc:
+@nogc nothrow:
 
 T* alloc(T, Args...)(Args args)
 {

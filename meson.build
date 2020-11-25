@@ -24,10 +24,11 @@ lzma_src = [
 
 jarchive_src = [
     'source/jarchive/package.d',
-    'source/jarchive/reader.d',
-    'source/jarchive/bits.d',
+    'source/jarchive/writer.d',
+    'source/jarchive/binarystream.d',
     'source/jarchive/memory.d',
     'source/jarchive/enums.d',
+    'source/jarchive/chunkhandler.d',
 ]
 
 all_d_src = jarchive_src

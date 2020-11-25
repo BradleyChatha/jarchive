@@ -1,3 +1,3 @@
 module jarchive;
 
-public import jarchive.reader, jarchive.bits, jarchive.memory, jarchive.enums;
+public import jarchive.writer, jarchive.binarystream, jarchive.memory, jarchive.enums, jarchive.chunkhandler;
