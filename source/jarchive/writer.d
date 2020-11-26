@@ -17,6 +17,7 @@ struct JarcWriter
         uint               _chunkCount;
         c_long             _ptrCrc;
         c_long             _ptrChunkCount;
+        c_long             _ptrChunkStart;
 
         JarcResult setup()
         {
@@ -42,6 +43,8 @@ struct JarcWriter
 
             result = jarcBinaryStream_writeU32(this._archiveStream, 0);
             if(result != JARC_OK) return result;
+
+            this._ptrChunkStart = jarcBinaryStream_getCursor(this._archiveStream);
 
             return JARC_OK;
         }
@@ -82,7 +85,8 @@ JarcResult jarcWriter_finalise(JarcWriter* writer)
     auto result = jarcBinaryStream_setCursor(writer._archiveStream, writer._ptrCrc);
     if(result != JARC_OK) return result;
 
-    result = jarcBinaryStream_writeU32(writer._archiveStream, 0); // TODO
+    const crc = jarcBinaryStream_calculateCrc(writer._archiveStream, writer._ptrChunkStart);
+    result = jarcBinaryStream_writeBytes(writer._archiveStream, crc.ptr, crc.length);
     if(result != JARC_OK) return result;
 
     result = jarcBinaryStream_setCursor(writer._archiveStream, writer._ptrChunkCount);
@@ -335,7 +339,7 @@ unittest
     static ubyte[] expected = [
         'j', 'r', 'c',
         JARC_VERSION_LATEST,
-        0, 0, 0, 0,
+        0xB9, 0xC1, 0xDD, 0x88,
         0, 0, 0, 3,
         
         0, 0,

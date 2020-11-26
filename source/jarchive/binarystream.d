@@ -460,6 +460,33 @@ JarcResult jarcBinaryStream_getMemory(
     return JARC_OK;
 }
 
+//////// START UTILITY ////////
+
+// NOTE: CRC32.finish() returns the CRC as a little-endian int.
+ubyte[4] jarcBinaryStream_calculateCrc(JarcBinaryStream* stream, c_long ptrStart)
+{
+    import std.digest.crc;
+
+    const ptrCurrent = jarcBinaryStream_getCursor(stream);
+    jarcBinaryStream_setCursor(stream, ptrStart);
+
+    ubyte[4096] buffer;
+    CRC32 crc;
+
+    crc.start();
+    while(true)
+    {
+        const bytesRead = jarcBinaryStream_readBytes(stream, buffer.ptr, null, buffer.length);
+        if(bytesRead == 0)
+            break;
+
+        crc.put(buffer[0..bytesRead]);
+    }
+
+    jarcBinaryStream_setCursor(stream, ptrCurrent);
+    return crc.finish();
+}
+
 //////// START UNITTESTS ////////
 
 unittest

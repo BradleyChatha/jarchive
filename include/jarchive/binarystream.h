@@ -43,4 +43,6 @@ JarcResult jarcBinaryStream_write7BitEncodedU(JarcBinaryStream* stream, uint64_t
 JarcResult jarcBinaryStream_writeString(JarcBinaryStream* stream, const char* text, size_t textLength);
 
 JarcResult jarcBinaryStream_getMemory(JarcBinaryStream* stream, uint8_t** bytesPtr, size_t* lengthPtr);
+
+uint32_t jarcBinaryStream_calculateCrc(JarcBinaryStream* stream, long ptrStart);
 #endif

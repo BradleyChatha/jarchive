@@ -3,7 +3,7 @@
 Header:
 u8  'jrc'
 u8  version
-u32 crc
+u32 crc                                 - Little-endian
 u32 chunkCount
 
 Data:
