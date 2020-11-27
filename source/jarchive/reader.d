@@ -42,6 +42,7 @@ struct JarcReader
         size_t             _namesRead;
         char[]             _typeBuffer;
         JarcChunkHeader[]  _chunkHeaders;
+        ubyte[]            _chunkDataBuffer;
 
         JarcResult readHeader()
         {
@@ -175,6 +176,20 @@ struct JarcReader
             this._typeBuffer = allocArray!char(largestTypeName);
             assert(this._typeBuffer !is null);
         }
+
+        ubyte[] getTempBuffer(size_t length)
+        {
+            const origLength = length;
+            if(length > this._chunkDataBuffer.length)
+            {
+                if(length < 4096)
+                    length = 4096;
+
+                resizeArray!ubyte(this._chunkDataBuffer, length);
+            }
+
+            return this._chunkDataBuffer[0..origLength];
+        }
     }
 
     @nogc nothrow
@@ -211,6 +226,9 @@ struct JarcReader
 
             if(this._chunkHeaders !is null)
                 free(this._chunkHeaders);
+
+            if(this._chunkDataBuffer !is null)
+                free(this._chunkDataBuffer);
         }
     }
 }
@@ -253,6 +271,93 @@ void jarcReader_getChunkHeaders(JarcReader* reader, const(JarcChunkHeader)** hea
     *headersCount = reader._chunkHeaders.length;
 }
 
+JarcResult jarcReader_readChunkByHeader(JarcReader* reader, const(JarcChunkHeader) header, void* userDataDest)
+{
+    import std.algorithm : max;
+
+    if(header.type is null)
+        return JARC_NO_HANDLER;
+
+    auto handler = jarcReader_getHandlerForType(reader, header.type, header.typeLength);
+    if(handler is null)
+        return JARC_NO_HANDLER;
+
+    auto result = jarcBinaryStream_setCursor(reader._archiveStream, header.ptrAttributeStart);
+    if(result != JARC_OK) 
+        return result;
+
+    auto buffer = reader.getTempBuffer(header.attributeSize);
+    if(buffer is null)
+        return JARC_OOM;
+
+    auto bytesRead = jarcBinaryStream_readBytes(reader._archiveStream, buffer.ptr, null, header.attributeSize);
+    if(bytesRead != header.attributeSize)
+        return JARC_EOF;
+
+    auto attribReader = jarcBinaryStream_openBorrowedMemory(JARC_READ, buffer.ptr, buffer.length);
+    if(attribReader is null)
+        return JARC_OOM;
+
+    result = handler.funcReadAttributes(attribReader, userDataDest);
+    jarcBinaryStream_free(attribReader);
+    if(result != JARC_OK)
+        return result;
+
+    const sizeInArchive = (header.flags & JARC_FLAG_COMPRESSED)
+    ? header.compressedSize
+    : header.uncompressedSize;
+
+    const largestSize = max(header.compressedSize, header.uncompressedSize);
+
+    result = jarcBinaryStream_setCursor(reader._archiveStream, header.ptrDataStart);
+    if(result != JARC_OK)
+        return result;
+
+    buffer = reader.getTempBuffer(largestSize * 2); // First half will store uncompressed, second stores compressed.
+    if(buffer is null)
+        return JARC_OOM;
+    
+    bytesRead = jarcBinaryStream_readBytes(reader._archiveStream, &buffer[largestSize], null, sizeInArchive);
+    if(bytesRead != sizeInArchive)
+        return JARC_EOF;
+
+    if(header.flags & JARC_FLAG_COMPRESSED)
+    {
+        import jarchive.lzma;
+
+        auto srcLength = cast()header.compressedSize;
+        auto dstLength = cast()header.uncompressedSize;
+
+        ELzmaStatus status;
+        const lzmaResult = LzmaDecode(
+            buffer.ptr, &dstLength,
+            &buffer[largestSize], &srcLength,
+            header.lzmaHeader.ptr, header.lzmaHeader.length,
+            LZMA_FINISH_END,
+            &status,
+            &g_defaultLzmaAlloc
+        );
+
+        if(lzmaResult != SZ_OK)
+            return JARC_UNKNOWN_ERROR;
+
+        buffer = buffer[0..dstLength];
+    }
+    else
+        buffer = buffer[largestSize..$]; // Use the "compressed" section as uncompressed, since that's what it's storing in this case.
+
+    auto bodyReader = jarcBinaryStream_openBorrowedMemory(JARC_READ, buffer.ptr, buffer.length);
+    if(bodyReader is null)
+        return JARC_OOM;
+
+    result = handler.funcReadBody(bodyReader, userDataDest);
+    jarcBinaryStream_free(bodyReader);
+    if(result != JARC_OK)
+        return result;
+
+    return JARC_OK;
+}
+
 unittest
 {
     struct Test
@@ -271,8 +376,27 @@ unittest
     };
     handler.funcWriteBody = (stream, userData)
     {
-        const test = *(cast(Test*) userData);
+        const test = *(cast(Test*)userData);
         return jarcBinaryStream_writeString(stream, test.str.ptr, test.str.length);
+    };
+    handler.funcReadAttributes = (stream, userData)
+    {
+        auto test = (cast(Test*)userData);
+        const result = jarcBinaryStream_readU8(stream, cast(ubyte*)&test.isBoob);
+        return result;
+    };
+    handler.funcReadBody = (stream, userData)
+    {
+        auto test = (cast(Test*)userData);
+        
+        char* text;
+        size_t length;
+        const result = jarcBinaryStream_readMallocedString(stream, &text, &length);
+        if(result != JARC_OK) return result;
+
+        // Don't do this! I need to do it since I can't access the GC here.
+        test.str = cast(string)text[0..length];
+        return JARC_OK;
     };
 
     JarcChunkHandler[1] handlers = [handler];
@@ -335,4 +459,19 @@ unittest
     assert(h.ptrAttributeStart == 0x3E);
     assert(h.ptrDataStart == 0x3F);
     assert(h.lzmaHeader != headers[0].lzmaHeader);
+
+    Test t;
+    assert(jarcReader_readChunkByHeader(reader, headers[0], &t) == JARC_OK);
+    assert(t.isBoob);
+    assert(t.str.length == 10);
+    assert(t.str == "Speedlings");
+    auto tStrSlice = cast(char[])t.str;
+    free(tStrSlice); // Again, don't. Do. This! It's just because I can't do a GC copy here.
+    
+    assert(jarcReader_readChunkByHeader(reader, headers[1], &t) == JARC_OK);
+    assert(!t.isBoob);
+    assert(t.str.length == 9);
+    assert(t.str == "Slowlings");
+    tStrSlice = cast(char[])t.str;
+    free(tStrSlice);
 }

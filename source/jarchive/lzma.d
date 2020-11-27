@@ -50,6 +50,23 @@ enum : SRes
     SZ_ERROR_OUTPUT_EOF = 7
 }
 
+alias ELzmaFinishMode = int;
+enum : ELzmaFinishMode
+{
+  LZMA_FINISH_ANY,   /* finish at any point */
+  LZMA_FINISH_END    /* block must be finished at the end */
+};
+
+alias ELzmaStatus = int;
+enum : ELzmaStatus
+{
+  LZMA_STATUS_NOT_SPECIFIED,               /* use main error code instead */
+  LZMA_STATUS_FINISHED_WITH_MARK,          /* stream was finished with end mark. */
+  LZMA_STATUS_NOT_FINISHED,                /* stream was not finished */
+  LZMA_STATUS_NEEDS_MORE_INPUT,            /* you must provide more input bytes */
+  LZMA_STATUS_MAYBE_FINISHED_WITHOUT_MARK  /* there is probability that stream was finished without end mark */
+}
+
 void LzmaEncProps_Init(CLzmaEncProps* p);
 SRes LzmaEncode(
     ubyte*                  dest, 
@@ -63,4 +80,16 @@ SRes LzmaEncode(
     ICompressProgress*      progress, 
     ISzAllocPtr             alloc, 
     ISzAllocPtr             allocBig
+);
+
+SRes LzmaDecode(
+    ubyte* dest, 
+    size_t* destLen, 
+    const ubyte* src, 
+    size_t* srcLen,
+    const ubyte* propData, 
+    uint propSize, 
+    ELzmaFinishMode finishMode,
+    ELzmaStatus* status, 
+    ISzAllocPtr alloc
 );

@@ -19,7 +19,8 @@ enum : int
     JARC_CANT_WRITE     = 1004,
     JARC_WRONG_MODE     = 1005,
     JARC_OOM            = 1006,
-    JARC_NO_HANDLER     = 1007
+    JARC_NO_HANDLER     = 1007,
+    JARC_NO_CHUNK       = 1008
 }
 alias JarcResult = int;
 

@@ -328,7 +328,11 @@ JarcResult jarcBinaryStream_readMallocedString(
 
     auto buffer = allocArray!char(cast(size_t)size);
     const bytesRead = jarcBinaryStream_readBytes(stream, cast(ubyte*)buffer.ptr, null, size);
-    if(bytesRead < size) return JARC_EOF;
+    if(bytesRead < size) 
+    {
+        free(buffer);
+        return JARC_EOF;
+    }
 
     *outputPtr = buffer.ptr;
     if(lengthPtr !is null)
