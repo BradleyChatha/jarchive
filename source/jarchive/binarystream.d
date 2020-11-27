@@ -314,6 +314,29 @@ JarcResult jarcBinaryStream_read7BitEncodedU(
     return JARC_OK;
 }
 
+JarcResult jarcBinaryStream_readMallocedString(
+    JarcBinaryStream* stream,
+    char** outputPtr,
+    size_t* lengthPtr
+)
+{
+    ulong size;
+    const result = jarcBinaryStream_read7BitEncodedU(stream, &size);
+    if(result != JARC_OK) return result;
+
+    version(x86) if(size > uint.max) return JARC_OOM;
+
+    auto buffer = allocArray!char(cast(size_t)size);
+    const bytesRead = jarcBinaryStream_readBytes(stream, cast(ubyte*)buffer.ptr, null, size);
+    if(bytesRead < size) return JARC_EOF;
+
+    *outputPtr = buffer.ptr;
+    if(lengthPtr !is null)
+        *lengthPtr = cast(size_t)size; // Safe, since the above version(x86) check will ensure we're in range for both platforms.
+
+    return JARC_OK;
+}
+
 //////// START WRITING ////////
 
 JarcResult jarcBinaryStream_writeBytes(
@@ -500,7 +523,8 @@ unittest
         0b1111_1111,
         0b0111_1111, 0b1111_1111,
         0b0111_1111, 0b0111_1111, 0b1111_1111,
-        0b0111_1111, 0b0111_1111, 0b0111_1111, 0b0111_1111, 0b0111_1111, 0b0111_1111, 0b0111_1111, 0b0111_1111, 0b0111_1111, 0b1000_0001
+        0b0111_1111, 0b0111_1111, 0b0111_1111, 0b0111_1111, 0b0111_1111, 0b0111_1111, 0b0111_1111, 0b0111_1111, 0b0111_1111, 0b1000_0001,
+        0b1000_0100, 'T', 'e', 's', 't'
     ];
 
     static T readOk(T, alias Func)(JarcBinaryStream* stream)
@@ -531,6 +555,16 @@ unittest
         assert(readOk!(ulong, jarcBinaryStream_read7BitEncodedU)(stream) == 0x3FFF);
         assert(readOk!(ulong, jarcBinaryStream_read7BitEncodedU)(stream) == 0x1FFFFF);
         assert(readOk!(ulong, jarcBinaryStream_read7BitEncodedU)(stream) == ulong.max);
+        
+        char* text;
+        size_t length;
+        assert(jarcBinaryStream_readMallocedString(stream, &text, &length) == JARC_OK);
+        assert(length == 4);
+        assert(text[0..4] == "Test");
+
+        auto textSlice = text[0..length];
+        free(textSlice);
+        
         assert(jarcBinaryStream_getCursor(stream) == bytes.length);
 
         assert(jarcBinaryStream_isEof(stream));
@@ -550,6 +584,7 @@ unittest
         writeOk!jarcBinaryStream_write7BitEncodedU(stream, 0x3FFF);
         writeOk!jarcBinaryStream_write7BitEncodedU(stream, 0x1FFFFF);
         writeOk!jarcBinaryStream_write7BitEncodedU(stream, ulong.max);
+        assert(jarcBinaryStream_writeString(stream, "Test", 4) == JARC_OK);
         assert(jarcBinaryStream_getCursor(stream) == bytes.length);
         assert(jarcBinaryStream_isEof(stream));
     }

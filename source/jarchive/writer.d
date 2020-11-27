@@ -71,7 +71,7 @@ struct JarcWriter
     }
 }
 
-JarcResult jarcWriter_openMemory(JarcWriter** writer, JarcChunkHandler* handlers, size_t handlerCount)
+JarcResult jarcWriter_openNewMemory(JarcWriter** writer, JarcChunkHandler* handlers, size_t handlerCount)
 {
     *writer = alloc!JarcWriter(
         jarcBinaryStream_openNewMemory(JARC_READ_WRITE),
@@ -284,7 +284,7 @@ unittest
     JarcChunkHandler[1] handlers = [handler];
 
     JarcWriter* writer;
-    auto result = jarcWriter_openMemory(&writer, handlers.ptr, handlers.length);
+    auto result = jarcWriter_openNewMemory(&writer, handlers.ptr, handlers.length);
     scope(exit) jarcWriter_free(writer);
     assert(writer !is null);
     assert(result == JARC_OK);

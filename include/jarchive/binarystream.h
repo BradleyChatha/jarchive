@@ -29,6 +29,7 @@ JarcResult jarcBinaryStream_readU16(JarcBinaryStream* stream, uint16_t* data);
 JarcResult jarcBinaryStream_readU32(JarcBinaryStream* stream, uint32_t* data);
 JarcResult jarcBinaryStream_readU64(JarcBinaryStream* stream, uint64_t* data);
 JarcResult jarcBinaryStream_read7BitEncodedU(JarcBinaryStream* stream, uint64_t* data);
+JarcResult jarcBinaryStream_readMallocedString(JarcBinaryStream* stream, char** outputPtr, size_t* lengthPtr);
 
 JarcResult jarcBinaryStream_writeBytes(
     JarcBinaryStream* stream,

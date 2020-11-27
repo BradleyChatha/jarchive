@@ -8,7 +8,7 @@
 
 typedef void JarcWriter;
 
-JarcResult jarcWriter_openMemory(JarcWriter** writer, JarcChunkHandler* handlers, size_t handlerCount);
+JarcResult jarcWriter_openNewMemory(JarcWriter** writer, JarcChunkHandler* handlers, size_t handlerCount);
 JarcResult jarcWriter_finalise(JarcWriter* writer);
 JarcResult jarcWriter_getMemory(JarcWriter* writer, uint8_t** bytesPtr, size_t* lengthPtr);
 JarcChunkHandler* jarcWriter_getHandlerForType(JarcWriter* writer, const char* chunkType, size_t chunkTypeLength);
