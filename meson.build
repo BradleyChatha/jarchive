@@ -1,5 +1,7 @@
 project('jarchive', 'c', 'd', version: '0.1', default_options: ['warning_level=3'])
 
+dlang = import('dlang')
+
 lzma_src = [
     'extern/lzma/7zTypes.h',
     'extern/lzma/LzmaDec.h',
@@ -39,5 +41,8 @@ d_include = include_directories('source/', 'extern/')
 
 lzma     = library('lzma', lzma_src)
 jarchive = library('jarchive', all_d_src, link_with: [lzma], include_directories: [d_include], d_args: ['--betterC'])
+
+install_subdir('source/jarchive', install_dir: join_paths(meson.current_source_dir(), 'build/include/d/jarchive'))
+install_subdir('include/c/jarchive', install_dir: join_paths(meson.current_source_dir(), 'build/include/c/jarchive'))
 
 test('basic', executable('jarchive-tests', all_d_src + ['test.d'], link_with: [lzma], include_directories: [d_include], d_unittest: true, d_module_versions: ['memory']))
