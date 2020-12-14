@@ -1,0 +1,5 @@
+{
+    "name": "jarchive",
+    "targetType": "library",
+    "targetPath": "dub_build"
+}
